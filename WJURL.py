@@ -168,6 +168,22 @@ def select_mode():
             return int(mode)
         print("输入无效，请重新输入！")
 
+
+def load_mode_config() -> int:
+    """从配置文件读取模式设置"""
+    import configparser
+
+    config = configparser.ConfigParser()
+    config_file = "config.ini"
+    try:
+        config.read(config_file)
+        mode_str = config.get("DEFAULT", "mode", fallback="1")
+        if mode_str in ("1", "2"):
+            return int(mode_str)
+    except Exception:
+        pass
+    return 1
+
 # 安装所需的包
 install_required_packages()
 
@@ -889,7 +905,7 @@ def main():
         pass
 
 # 全局模式变量
-mode = 1  # 默认模式1
+mode = load_mode_config()  # 从配置文件读取模式，默认模式1
 
 def show_main_menu():
     """显示主菜单"""
@@ -898,6 +914,7 @@ def show_main_menu():
         print("\n" + "="*60)
         print(" "*20 + "🎯 主菜单" + " "*20)
         print("="*60)
+        print(f"\n当前模式: 模式{mode}")
         print("\n📋 功能选项:")
         print("   1. 审核人员身份证录入")
         print("   2. 拆分模式选择")
