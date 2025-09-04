@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Excel转换程序 v2.0
+微剧URL转换工具v1.6
 功能：
 1. 将所有单元格高度改为140磅
 2. 将所有单元格设置为垂直和水平居中
@@ -927,4 +927,5 @@ def show_main_menu():
             break
 
 if __name__ == "__main__":
+
     main()
