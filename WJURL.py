@@ -36,6 +36,9 @@ import re
 
 # 人员库文件路径
 STAFF_DB_FILE = "staff_database.json"
+# 配置文件路径（位于脚本同目录）
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
 
 def print_banner():
     """打印程序横幅"""
@@ -140,11 +143,10 @@ def select_mode():
     """选择处理模式并保存到配置文件"""
     import configparser
     config = configparser.ConfigParser()
-    config_file = "config.ini"
-    
+
     # 尝试从配置文件读取模式
     try:
-        config.read(config_file)
+        config.read(CONFIG_FILE)
         saved_mode = config.get("DEFAULT", "mode", fallback=None)
         if saved_mode in ("1", "2"):
             print(f"\n当前模式为: 模式{saved_mode}")
@@ -161,7 +163,7 @@ def select_mode():
             # 保存模式到配置文件
             try:
                 config["DEFAULT"] = {"mode": mode}
-                with open(config_file, "w") as f:
+                with open(CONFIG_FILE, "w") as f:
                     config.write(f)
             except Exception as e:
                 print(f"保存模式到配置文件失败: {e}")
@@ -174,9 +176,8 @@ def load_mode_config() -> int:
     import configparser
 
     config = configparser.ConfigParser()
-    config_file = "config.ini"
     try:
-        config.read(config_file)
+        config.read(CONFIG_FILE)
         mode_str = config.get("DEFAULT", "mode", fallback="1")
         if mode_str in ("1", "2"):
             return int(mode_str)
