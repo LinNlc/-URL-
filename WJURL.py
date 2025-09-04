@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-微剧URL转换工具v1.6
+Excel转换程序 v2.0
 功能：
 1. 将所有单元格高度改为140磅
 2. 将所有单元格设置为垂直和水平居中
@@ -23,6 +23,8 @@ from typing import Optional, Dict, List
 import time
 import json
 import re
+import concurrent.futures
+import threading
 
 # ============================================================================
 #                           微剧URL转换工具v1.6
@@ -36,9 +38,11 @@ import re
 
 # 人员库文件路径
 STAFF_DB_FILE = "staff_database.json"
-# 配置文件路径（位于脚本同目录）
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
+
+# 版本信息
+CURRENT_VERSION = "1.6"
+VERSION_CHECK_URL = "https://raw.githubusercontent.com/yourusername/yourrepo/main/version.json"
+UPDATE_DOWNLOAD_URL = "https://github.com/yourusername/yourrepo/releases/download/v{version}/微剧URL转换工具v{version}.exe"
 
 def print_banner():
     """打印程序横幅"""
@@ -143,10 +147,11 @@ def select_mode():
     """选择处理模式并保存到配置文件"""
     import configparser
     config = configparser.ConfigParser()
-
+    config_file = "config.ini"
+    
     # 尝试从配置文件读取模式
     try:
-        config.read(CONFIG_FILE)
+        config.read(config_file)
         saved_mode = config.get("DEFAULT", "mode", fallback=None)
         if saved_mode in ("1", "2"):
             print(f"\n当前模式为: 模式{saved_mode}")
@@ -163,27 +168,12 @@ def select_mode():
             # 保存模式到配置文件
             try:
                 config["DEFAULT"] = {"mode": mode}
-                with open(CONFIG_FILE, "w") as f:
+                with open(config_file, "w") as f:
                     config.write(f)
             except Exception as e:
                 print(f"保存模式到配置文件失败: {e}")
             return int(mode)
         print("输入无效，请重新输入！")
-
-
-def load_mode_config() -> int:
-    """从配置文件读取模式设置"""
-    import configparser
-
-    config = configparser.ConfigParser()
-    try:
-        config.read(CONFIG_FILE)
-        mode_str = config.get("DEFAULT", "mode", fallback="1")
-        if mode_str in ("1", "2"):
-            return int(mode_str)
-    except Exception:
-        pass
-    return 1
 
 # 安装所需的包
 install_required_packages()
@@ -263,6 +253,7 @@ def is_valid_url(url):
     return bool(url_pattern.match(url.strip()))
 
 def download_image(url):
+    """下载单个图片"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=15)
@@ -274,6 +265,40 @@ def download_image(url):
     except Exception as e:
         print(f"下载图片失败 {url}: {e}")
         return None
+
+def download_images_concurrently(urls, max_workers=10):
+    """并发下载多个图片"""
+    print_status(f"开始并发下载 {len(urls)} 个图片 (线程数: {max_workers})...", "loading")
+    
+    results = {}
+    
+    def download_single(url_idx_url):
+        url_idx, url = url_idx_url
+        image_data = download_image(url)
+        return url_idx, image_data
+    
+    # 准备任务列表
+    tasks = [(idx, url) for idx, url in enumerate(urls)]
+    
+    # 使用线程池并发下载
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_url = {executor.submit(download_single, task): task for task in tasks}
+        
+        completed = 0
+        total = len(tasks)
+        
+        for future in concurrent.futures.as_completed(future_to_url):
+            completed += 1
+            print_progress_bar(completed, total, f"🖼️  并发下载图片 {completed}/{total}")
+            
+            try:
+                url_idx, image_data = future.result()
+                results[url_idx] = image_data
+            except Exception as e:
+                print(f"并发下载任务异常: {e}")
+    
+    print()  # 保证进度条换行
+    return results
 
 def print_progress(current, total, description=""):
     """显示进度条"""
@@ -410,12 +435,16 @@ def convert_urls_to_images(workbook):
         success_count = 0
         image_paths: list[Optional[str]] = [None for _ in range(url_count)]
         
-        # 先批量下载图片
-        print_status("开始下载图片...", "loading")
+        # 使用并发下载图片
+        download_results = download_images_concurrently(url_list, max_workers=10)
+        
+        # 处理下载的图片
+        processed_count = 0
         for idx, url in enumerate(url_list):
             processed_count += 1
-            print_progress_bar(processed_count, url_count, f"🖼️  下载图片 {processed_count}/{url_count}")
-            image_data = download_image(url)
+            print_progress_bar(processed_count, url_count, f"🖼️  处理图片 {processed_count}/{url_count}")
+            
+            image_data = download_results.get(idx)
             if image_data:
                 try:
                     pil_image = Image.open(io.BytesIO(image_data))
@@ -808,6 +837,11 @@ def check_actor_name(name):
 def main():
     print_step_header("程序启动", 1, 6)
     
+    # 重新加载模式设置（确保每次运行都读取最新配置）
+    global mode
+    mode = load_mode_from_config()
+    print_status(f"当前处理模式: 模式{mode}", "info")
+    
     # 检查是否有命令行参数
     if len(sys.argv) < 2:
         # 没有参数，显示主菜单
@@ -905,8 +939,24 @@ def main():
     except (EOFError, RuntimeError):
         pass
 
+def load_mode_from_config():
+    """从配置文件加载模式设置"""
+    import configparser
+    config = configparser.ConfigParser()
+    config_file = "config.ini"
+    
+    try:
+        config.read(config_file)
+        saved_mode = config.get("DEFAULT", "mode", fallback="1")
+        if saved_mode in ("1", "2"):
+            return int(saved_mode)
+    except Exception as e:
+        print(f"读取配置文件失败: {e}")
+    
+    return 1  # 默认模式1
+
 # 全局模式变量
-mode = load_mode_config()  # 从配置文件读取模式，默认模式1
+mode = load_mode_from_config()  # 从配置文件加载模式
 
 def show_main_menu():
     """显示主菜单"""
@@ -915,7 +965,6 @@ def show_main_menu():
         print("\n" + "="*60)
         print(" "*20 + "🎯 主菜单" + " "*20)
         print("="*60)
-        print(f"\n当前模式: 模式{mode}")
         print("\n📋 功能选项:")
         print("   1. 审核人员身份证录入")
         print("   2. 拆分模式选择")
@@ -945,5 +994,4 @@ def show_main_menu():
             break
 
 if __name__ == "__main__":
-
     main()
