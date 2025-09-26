@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from io import BytesIO
 from typing import Dict, List, Tuple
 
 import pandas as pd
@@ -58,6 +59,12 @@ def init_state() -> None:
             st.session_state.schedule_meta["start"],
             st.session_state.schedule_meta["months"],
         )
+
+    if "summary_tolerance" not in st.session_state:
+        st.session_state.summary_tolerance = 0
+
+    if "selected_person" not in st.session_state:
+        st.session_state.selected_person = ("", "")
 
 
 def build_schedule_dataframe(start_date: date, months: int) -> pd.DataFrame:
@@ -260,6 +267,28 @@ def sidebar_controls() -> None:
                     st.experimental_rerun()
 
 
+def export_tools(schedule: pd.DataFrame) -> None:
+    """导出排班与汇总数据为 Excel 供线下归档。"""
+
+    display_df = schedule.copy()
+    display_df[("日期", "")] = pd.to_datetime(display_df[("日期", "")]).dt.strftime("%Y-%m-%d")
+
+    summary_df = build_summary(schedule)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        display_df.to_excel(writer, sheet_name="排班表", index=False)
+        if not summary_df.empty:
+            summary_df.reset_index().to_excel(writer, sheet_name="统计汇总", index=False)
+
+    st.download_button(
+        "导出为Excel",
+        data=output.getvalue(),
+        file_name=f"排班表_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+
 def flatten_schedule_for_editor(schedule: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Tuple[str, str]]]:
     """Flatten multi-level columns to string labels for editing."""
     label_map: Dict[str, Tuple[str, str]] = {}
@@ -352,11 +381,12 @@ def highlight_summary(summary_df: pd.DataFrame) -> pd.io.formats.style.Styler:
 
     shift_columns = [col for col in summary_df.columns if col != "总班次"]
     averages = summary_df[shift_columns].mean()
+    tolerance = st.session_state.get("summary_tolerance", 0)
 
     def highlight(cell, column):
         if pd.isna(cell):
             return ""
-        if cell > averages[column]:
+        if cell > averages[column] + tolerance:
             return "background-color: #ffd6d6; font-weight: bold;"
         return ""
 
@@ -426,6 +456,19 @@ def statistics_section(schedule: pd.DataFrame) -> None:
         st.info("请先维护人员并排班，以查看统计数据。")
         return
 
+    with st.expander("偏差阈值设置", expanded=False):
+        st.caption("超过平均值多少次后标红，可用来控制容忍度。")
+        shift_only = summary_df.drop(columns="总班次", errors="ignore")
+        candidates = shift_only.to_numpy().flatten().tolist() if not shift_only.empty else []
+        max_shift = int(max(candidates + [5]))
+        tolerance = st.slider(
+            "超出平均值（班次）阈值",
+            min_value=0,
+            max_value=max_shift,
+            value=min(st.session_state.summary_tolerance, max_shift),
+        )
+        st.session_state.summary_tolerance = tolerance
+
     st.markdown("**整体概览**")
     st.write(highlight_summary(summary_df))
 
@@ -455,6 +498,37 @@ def statistics_section(schedule: pd.DataFrame) -> None:
     month_summary = build_summary(month_df)
     st.write(highlight_summary(month_summary))
 
+    person_columns = [col for col in schedule.columns if col[0] not in ("日期", "星期")]
+    if person_columns:
+        st.markdown("**个人详情**")
+        groups = sorted({group for group, _ in person_columns})
+        group_choice = st.selectbox("选择组别", [""] + groups, index=groups.index(st.session_state.selected_person[0]) + 1 if st.session_state.selected_person[0] in groups else 0)
+        people = [name for grp, name in person_columns if grp == group_choice] if group_choice else []
+        person_choice = st.selectbox(
+            "选择人员",
+            [""] + people,
+            index=people.index(st.session_state.selected_person[1]) + 1 if group_choice and st.session_state.selected_person[1] in people else 0,
+        )
+        st.session_state.selected_person = (group_choice, person_choice)
+
+        if group_choice and person_choice:
+            person_series = schedule[(group_choice, person_choice)]
+            person_df = pd.DataFrame({"日期": schedule[("日期", "")], "班次": person_series})
+            person_df = person_df[person_df["班次"] != ""]
+            if person_df.empty:
+                st.info("该人员在所选周期内暂无排班记录。")
+            else:
+                monthly = (
+                    person_df.assign(月份=pd.to_datetime(person_df["日期"]).dt.to_period("M"))
+                    .groupby(["月份", "班次"])
+                    .size()
+                    .unstack(fill_value=0)
+                )
+                st.dataframe(monthly, use_container_width=True)
+
+                shift_counts = person_df["班次"].value_counts().rename("次数").to_frame()
+                st.dataframe(shift_counts, use_container_width=True)
+
 
 def main() -> None:
     st.set_page_config(page_title="灵活排班助手", layout="wide")
@@ -465,6 +539,9 @@ def main() -> None:
     st.caption("以表格化视图提升排班效率，支持自定义班次、人员及提醒逻辑。")
 
     sidebar_controls()
+
+    st.subheader("常用工具")
+    export_tools(st.session_state.schedule)
 
     st.subheader("排班表编辑")
     st.info("双击单元格即可选择班次，支持自定义班次名称与颜色。")
